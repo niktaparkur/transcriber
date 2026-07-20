@@ -9,14 +9,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # 1. Скачиваем и собираем CrispASR (Движок)
       - name: Clone CrispASR
         run: git clone --recursive https://github.com/CrispStrobe/CrispASR.git crispasr-src
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1.1
+        uses: microsoft/setup-msbuild@v2
 
       - name: Compile CrispASR
         working-directory: ./crispasr-src
@@ -28,7 +28,7 @@ jobs:
 
       # 2. Собираем Python GUI
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -38,26 +38,21 @@ jobs:
           pip install pyinstaller
 
       - name: Build PyQt6 App
-        # Создаем экзешник без черного окна консоли
         run: pyinstaller --noconfirm --onedir --windowed --name "IdusTranscriber" main.py
 
       # 3. Формируем финальный архив
       - name: Prepare Final Release Folder
         run: |
           mkdir Release
-          # Копируем GUI
           xcopy /E /I dist\IdusTranscriber Release\IdusTranscriber
-          # Добавляем нужные папки
           mkdir Release\IdusTranscriber\bin
           mkdir Release\IdusTranscriber\models
-          # Кладем движок на свое место
           copy bin\crispasr.exe Release\IdusTranscriber\bin\
-          # Создаем пустой текстовый файл как инструкцию
           echo "Place parakeet-tdt-0.6b-v3-q8_0.gguf here" > Release\IdusTranscriber\models\PUT_MODEL_HERE.txt
 
-      # 4. Загружаем Артефакт на GitHub
+      # 4. Загружаем Артефакт на GitHub (Обновлено до v4)
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: IdusTranscriber-Windows
           path: Release/IdusTranscriber/
