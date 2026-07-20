@@ -15,6 +15,14 @@ jobs:
       - name: Clone CrispASR
         run: git clone --recursive https://github.com/CrispStrobe/CrispASR.git crispasr-src
 
+      - name: Cache CrispASR Build
+        uses: actions/cache@v4
+        with:
+          path: crispasr-src/build
+          key: ${{ runner.os }}-crispasr-${{ hashFiles('crispasr-src/**/*.cpp', 'crispasr-src/**/*.h', 'crispasr-src/**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-crispasr-
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
