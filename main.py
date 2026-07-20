@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,6 @@ class TranscriptionThread(QThread):
         self.output_dir = Path(output_dir)
 
     def run(self):
-        # Проверяем физическое существование оригинальных путей
         if not CRISPASR_PATH.exists():
             self.log_update.emit(
                 f"❌ ОШИБКА: Движок не найден по пути:\n{CRISPASR_PATH}"
@@ -86,8 +86,26 @@ class TranscriptionThread(QThread):
                 f"Распознаю {index + 1} из {total_files}...",
             )
 
-            # Конвертируем путь к аудиофайлу в безопасный короткий формат
+            # Пытаемся получить короткий путь для аудиофайла
             safe_audio = get_short_path(file_path)
+            temp_file_created = None
+
+            # КРИТИЧЕСКИЙ ОБХОД ДЛЯ ДИСКА E:
+            # Если путь все еще содержит кириллицу (например, если 8.3 отключено на диске E:)
+            if IS_WINDOWS and any(ord(c) > 127 for c in safe_audio):
+                try:
+                    self.log_update.emit(
+                        "📝 Копирую аудио во временную папку на диск C: (обход ограничений путей)..."
+                    )
+                    # TEMP папка на диске C: гарантированно поддерживает короткие пути
+                    temp_dir = Path(os.environ.get("TEMP", os.path.expanduser("~")))
+                    temp_file_path = temp_dir / f"idus_temp_{index}{file_path.suffix}"
+
+                    shutil.copy2(file_path, temp_file_path)
+                    safe_audio = get_short_path(temp_file_path)
+                    temp_file_created = temp_file_path
+                except Exception as e:
+                    self.log_update.emit(f"⚠️ Предупреждение при обходе пути: {e}")
 
             # Настройки скрытия окна консоли для Windows
             startupinfo = None
@@ -106,32 +124,45 @@ class TranscriptionThread(QThread):
             ]
 
             try:
+                # errors='replace' защищает от падений при чтении вывода в кодировке отличной от UTF-8
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     startupinfo=startupinfo,
                     encoding="utf-8",
+                    errors="replace",
                 )
 
+                # Безопасно получаем вывод, исключая ошибку NoneType
+                stdout_val = (result.stdout or "").strip()
+                stderr_val = (result.stderr or "").strip()
+
                 if result.returncode == 0:
-                    text = result.stdout.strip()
-                    # Сохраняем результат в .txt файл (имя выходного файла оставляем красивым)
+                    # Сохраняем результат в .txt файл
                     output_file = self.output_dir / f"{file_path.stem}.txt"
                     with open(output_file, "w", encoding="utf-8") as f:
-                        f.write(text)
+                        f.write(stdout_val)
                     self.log_update.emit(f"✅ Сохранено в: {output_file.name}")
                 else:
                     error_details = (
-                        result.stderr.strip()
-                        if result.stderr.strip()
+                        stderr_val
+                        if stderr_val
                         else f"Процесс завершился с кодом {result.returncode}"
                     )
                     self.log_update.emit(
                         f"❌ Ошибка в файле {file_path.name}:\n{error_details}"
                     )
+
             except Exception as e:
                 self.log_update.emit(f"❌ Системная ошибка:\n{str(e)}")
+            finally:
+                # Удаляем временный файл с диска C:, если мы его создавали
+                if temp_file_created and temp_file_created.exists():
+                    try:
+                        os.remove(temp_file_created)
+                    except Exception as e:
+                        print(f"Не удалось удалить временный файл: {e}")
 
         self.progress_update.emit(100, "Готово!")
         self.finished_queue.emit()
@@ -183,7 +214,7 @@ class MainWindow(QMainWindow):
         btn_layout = QVBoxLayout()
         self.btn_add = QPushButton("+ Добавить аудио")
         self.btn_add.clicked.connect(self.add_files)
-        self.btn_remove = QPushButton("-  Удалить выделенное")
+        self.btn_remove = QPushButton("- Удалить выделенное")
         self.btn_remove.clicked.connect(self.remove_file)
         self.btn_remove.setStyleSheet("background-color: #f38ba8; color: #11111b;")
 
@@ -206,7 +237,7 @@ class MainWindow(QMainWindow):
         mid_layout.addWidget(self.btn_change_dir)
         layout.addLayout(mid_layout)
 
-        # --- ПАНЕЛЬ ПРОГРЕССА И ЗАЗАПУСКА ---
+        # --- ПАНЕЛЬ ПРОГРЕССА И ЗАПУСКА ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_label = QLabel("Ожидание...")
