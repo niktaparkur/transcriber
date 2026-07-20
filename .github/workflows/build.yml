@@ -20,13 +20,16 @@ jobs:
 
       - name: Compile CrispASR
         working-directory: ./crispasr-src
-        shell: cmd # Переключаем на классический CMD
+        shell: cmd
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release -j 2
           mkdir ..\bin
-          :: Рекурсивно ищем crispasr.exe внутри папки build и копируем в ..\bin
-          for /R build %%i in (crispasr.exe) do if exist "%%i" copy "%%i" ..\bin\
+          :: Находим crispasr.exe, копируем его и ВСЕ .dll файлы из той же папки
+          for /R build %%i in (crispasr.exe) do if exist "%%i" (
+            copy "%%i" ..\bin\
+            xcopy /Y "%%~dpi*.dll" ..\bin\
+          )
 
       # 2. Собираем Python GUI
       - name: Set up Python
@@ -44,13 +47,14 @@ jobs:
 
       # 3. Формируем финальный архив
       - name: Prepare Final Release Folder
-        shell: cmd # Переключаем на классический CMD
+        shell: cmd
         run: |
           mkdir Release
           xcopy /E /I dist\IdusTranscriber Release\IdusTranscriber
           mkdir Release\IdusTranscriber\bin
           mkdir Release\IdusTranscriber\models
-          copy bin\crispasr.exe Release\IdusTranscriber\bin\
+          :: Копируем абсолютно ВСЕ файлы из bin (включая собранные .dll) в релиз
+          xcopy /Y bin\* Release\IdusTranscriber\bin\
           echo Place parakeet-tdt-0.6b-v3-q8_0.gguf here > Release\IdusTranscriber\models\PUT_MODEL_HERE.txt
 
       # 4. Загружаем Артефакт на GitHub
