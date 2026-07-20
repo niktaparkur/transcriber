@@ -1,0 +1,63 @@
+name: Build Idus Transcriber for Windows
+
+on:
+  push:
+    branches: ["main", "master"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 1. Скачиваем и собираем CrispASR (Движок)
+      - name: Clone CrispASR
+        run: git clone --recursive https://github.com/CrispStrobe/CrispASR.git crispasr-src
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1.1
+
+      - name: Compile CrispASR
+        working-directory: ./crispasr-src
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j 2
+          mkdir ../bin
+          copy build\bin\Release\crispasr.exe ..\bin\
+
+      # 2. Собираем Python GUI
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build PyQt6 App
+        # Создаем экзешник без черного окна консоли
+        run: pyinstaller --noconfirm --onedir --windowed --name "IdusTranscriber" main.py
+
+      # 3. Формируем финальный архив
+      - name: Prepare Final Release Folder
+        run: |
+          mkdir Release
+          # Копируем GUI
+          xcopy /E /I dist\IdusTranscriber Release\IdusTranscriber
+          # Добавляем нужные папки
+          mkdir Release\IdusTranscriber\bin
+          mkdir Release\IdusTranscriber\models
+          # Кладем движок на свое место
+          copy bin\crispasr.exe Release\IdusTranscriber\bin\
+          # Создаем пустой текстовый файл как инструкцию
+          echo "Place parakeet-tdt-0.6b-v3-q8_0.gguf here" > Release\IdusTranscriber\models\PUT_MODEL_HERE.txt
+
+      # 4. Загружаем Артефакт на GitHub
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: IdusTranscriber-Windows
+          path: Release/IdusTranscriber/
