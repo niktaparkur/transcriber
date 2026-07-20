@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
 )
 
 # --- ОПРЕДЕЛЕНИЕ ПУТЕЙ ---
-# Если программа запущена как скомпилированный .exe
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys.executable).parent
 else:
@@ -29,8 +28,23 @@ else:
 
 IS_WINDOWS = os.name == "nt"
 CRISPASR_PATH = BASE_DIR / "bin" / ("crispasr.exe" if IS_WINDOWS else "crispasr")
-# Ты можешь поменять название модели, если скачаешь другую
 MODEL_PATH = BASE_DIR / "models" / "parakeet-tdt-0.6b-v3-q8_0.gguf"
+
+
+def get_short_path(path):
+    """Преобразует путь в короткий формат 8.3 (только для Windows),
+    чтобы обойти баг C++ движка с кириллицей в путях."""
+    if IS_WINDOWS and os.path.exists(path):
+        try:
+            import ctypes
+
+            buf = ctypes.create_unicode_buffer(1024)
+            ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, 1024)
+            if buf.value:
+                return buf.value
+        except Exception as e:
+            print(f"Предупреждение при конвертации пути: {e}")
+    return str(path)
 
 
 class TranscriptionThread(QThread):
@@ -46,6 +60,7 @@ class TranscriptionThread(QThread):
         self.output_dir = Path(output_dir)
 
     def run(self):
+        # Проверяем физическое существование оригинальных путей
         if not CRISPASR_PATH.exists():
             self.log_update.emit(
                 f"❌ ОШИБКА: Движок не найден по пути:\n{CRISPASR_PATH}"
@@ -57,15 +72,22 @@ class TranscriptionThread(QThread):
             )
             return
 
+        # Конвертируем пути к движку и модели в безопасный короткий формат
+        safe_engine = get_short_path(CRISPASR_PATH)
+        safe_model = get_short_path(MODEL_PATH)
+
         total_files = len(self.file_queue)
 
-        for index, file_path in enumerate(self.file_queue):
-            file_path = Path(file_path)
+        for index, file_path_str in enumerate(self.file_queue):
+            file_path = Path(file_path_str)
             self.log_update.emit(f"\n▶️ Обработка: {file_path.name}...")
             self.progress_update.emit(
                 int((index / total_files) * 100),
                 f"Распознаю {index + 1} из {total_files}...",
             )
+
+            # Конвертируем путь к аудиофайлу в безопасный короткий формат
+            safe_audio = get_short_path(file_path)
 
             # Настройки скрытия окна консоли для Windows
             startupinfo = None
@@ -74,11 +96,11 @@ class TranscriptionThread(QThread):
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
             cmd = [
-                str(CRISPASR_PATH),
+                safe_engine,
                 "-m",
-                str(MODEL_PATH),
+                safe_model,
                 "-f",
-                str(file_path),
+                safe_audio,
                 "--backend",
                 "parakeet",
             ]
@@ -94,14 +116,19 @@ class TranscriptionThread(QThread):
 
                 if result.returncode == 0:
                     text = result.stdout.strip()
-                    # Сохраняем результат в .txt файл
+                    # Сохраняем результат в .txt файл (имя выходного файла оставляем красивым)
                     output_file = self.output_dir / f"{file_path.stem}.txt"
                     with open(output_file, "w", encoding="utf-8") as f:
                         f.write(text)
                     self.log_update.emit(f"✅ Сохранено в: {output_file.name}")
                 else:
+                    error_details = (
+                        result.stderr.strip()
+                        if result.stderr.strip()
+                        else f"Процесс завершился с кодом {result.returncode}"
+                    )
                     self.log_update.emit(
-                        f"❌ Ошибка в файле {file_path.name}:\n{result.stderr}"
+                        f"❌ Ошибка в файле {file_path.name}:\n{error_details}"
                     )
             except Exception as e:
                 self.log_update.emit(f"❌ Системная ошибка:\n{str(e)}")
@@ -156,11 +183,9 @@ class MainWindow(QMainWindow):
         btn_layout = QVBoxLayout()
         self.btn_add = QPushButton("+ Добавить аудио")
         self.btn_add.clicked.connect(self.add_files)
-        self.btn_remove = QPushButton("- Удалить выделенное")
+        self.btn_remove = QPushButton("-  Удалить выделенное")
         self.btn_remove.clicked.connect(self.remove_file)
-        self.btn_remove.setStyleSheet(
-            "background-color: #f38ba8; color: #11111b;"
-        )  # Красная кнопка
+        self.btn_remove.setStyleSheet("background-color: #f38ba8; color: #11111b;")
 
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_remove)
@@ -181,7 +206,7 @@ class MainWindow(QMainWindow):
         mid_layout.addWidget(self.btn_change_dir)
         layout.addLayout(mid_layout)
 
-        # --- ПАНЕЛЬ ПРОГРЕССА И ЗАПУСКА ---
+        # --- ПАНЕЛЬ ПРОГРЕССА И ЗАЗАПУСКА ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_label = QLabel("Ожидание...")
@@ -205,7 +230,6 @@ class MainWindow(QMainWindow):
             self, "Выберите аудио", "", "Audio (*.wav *.mp3 *.ogg *.flac)"
         )
         for f in files:
-            # Проверяем, нет ли уже такого файла в списке
             items = [
                 self.file_list.item(i).text() for i in range(self.file_list.count())
             ]
@@ -233,7 +257,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Пусто", "Добавьте аудиофайлы в очередь!")
             return
 
-        # Блокируем интерфейс от случайных кликов
         self.btn_start.setEnabled(False)
         self.btn_add.setEnabled(False)
         self.btn_remove.setEnabled(False)
@@ -241,7 +264,6 @@ class MainWindow(QMainWindow):
         self.log_output.clear()
         self.progress_bar.setValue(0)
 
-        # Запускаем поток
         self.thread = TranscriptionThread(files_to_process, self.output_path)
         self.thread.progress_update.connect(self.update_progress)
         self.thread.log_update.connect(self.append_log)
